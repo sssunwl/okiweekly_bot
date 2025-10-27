@@ -1,70 +1,58 @@
-import os
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
-import urllib.parse
+import datetime
+import os
+import telegram
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
+
 BASE_URL = "https://visitokinawajapan.com/zh-hant/discover/events/"
 
-def send_telegram(message):
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("Telegram token or chat_id not set")
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
-    try:
-        resp = requests.post(url, data=payload)
-        resp.raise_for_status()
-        print("Telegram 發送成功 ✅")
-    except Exception as e:
-        print("Telegram 發送失敗：", e)
-
-def parse_events():
+def get_events_by_month(month: int):
     resp = requests.get(BASE_URL)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "lxml")
 
-    # 當前月 + 下個月
-    today = datetime.today()
-    months_to_check = [today.month, (today + timedelta(days=31)).month]
-
-    events_section = soup.find("section", {"class": "c-event-latest"})  # 最新即時活動
-    if not events_section:
+    # 最新即時活動區塊
+    section = soup.find("h2", string="最新即時活動")
+    if not section:
         return []
 
     events = []
-    for dt_tag in events_section.find_all("dt"):
-        name = dt_tag.get_text(strip=True)
-        dd_tag = dt_tag.find_next_sibling("div", {"class": "e-content"})
-        date_text = dd_tag.get_text(strip=True) if dd_tag else ""
-        # 解析開始月
-        start_month = None
-        if "-" in date_text:
-            start_str = date_text.split("-")[0].strip()
-            try:
-                start_date = datetime.strptime(start_str, "%Y/%m/%d")
-                start_month = start_date.month
-            except:
-                start_month = None
-        # 只抓當月或下個月
-        if start_month and start_month in months_to_check:
-            link_tag = dt_tag.find_previous("a", href=True)
-            link = urllib.parse.urljoin(BASE_URL, link_tag['href']) if link_tag else BASE_URL
-            events.append(f"{date_text}\n<a href='{link}'>{name}</a>")
+    parent = section.find_next("section")
+    if not parent:
+        return []
+
+    for dt in parent.find_all("dt"):
+        name = dt.text.strip()
+        # 對應 <div class="e-content"> 的日期
+        date_div = dt.find_next("div", class_="e-content")
+        date_text = date_div.text.strip() if date_div else ""
+        # 過濾月份
+        try:
+            start_date = datetime.datetime.strptime(date_text.split("-")[0].strip(), "%Y/%m/%d")
+            if start_date.month == month:
+                # 超連結
+                link_tag = dt.find_previous("a", href=True)
+                link = "https://visitokinawajapan.com" + link_tag["href"] if link_tag else BASE_URL
+                events.append((date_text, name, link))
+        except:
+            continue
     return events
 
-def main():
-    try:
-        events = parse_events()
-        if not events:
-            send_telegram(f"本週沒有找到指定月份的活動。")
-        else:
-            message = "\n".join(events)
-            send_telegram(message)
-    except Exception as e:
-        print("抓取發生錯誤：", e)
+def send_telegram(events, month):
+    bot = telegram.Bot(token=TELEGRAM_TOKEN)
+    if not events:
+        msg = f"本月 ({month}月) 沒有找到指定月份的活動。"
+    else:
+        msg = f"本月 ({month}月) 活動：\n"
+        for date_text, name, link in events:
+            msg += f"{date_text}\n[{name}]({link})\n"
+    bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
 
 if __name__ == "__main__":
-    main()
+    # 測試用，可改成從 Telegram 命令接收 month
+    month = int(input("請輸入月份 (1-12): "))
+    events = get_events_by_month(month)
+    send_telegram(events, month)
