@@ -26,14 +26,12 @@ def get_events_by_month(month: int):
 
     for dt in parent.find_all("dt"):
         name = dt.text.strip()
-        # 對應 <div class="e-content"> 的日期
         date_div = dt.find_next("div", class_="e-content")
         date_text = date_div.text.strip() if date_div else ""
         # 過濾月份
         try:
             start_date = datetime.datetime.strptime(date_text.split("-")[0].strip(), "%Y/%m/%d")
             if start_date.month == month:
-                # 超連結
                 link_tag = dt.find_previous("a", href=True)
                 link = "https://visitokinawajapan.com" + link_tag["href"] if link_tag else BASE_URL
                 events.append((date_text, name, link))
@@ -52,7 +50,7 @@ def send_telegram(events, month):
     bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
 
 if __name__ == "__main__":
-    # 測試用，可改成從 Telegram 命令接收 month
-    month = int(input("請輸入月份 (1-12): "))
+    # 從環境變數抓月份，沒設定就抓當月
+    month = int(os.environ.get("MONTH", datetime.datetime.now().month))
     events = get_events_by_month(month)
     send_telegram(events, month)
