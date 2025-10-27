@@ -1,6 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 
 # Telegram 設定（從環境變數讀）
@@ -30,38 +30,41 @@ def get_visit_okinawa_events():
         print("⚠️ 找不到『搜尋熱門活動』區塊。")
         return events
 
-    container = section.find_next("div")  # 下一個 div 內包含活動卡片
+    container = section.find_next("div")
     if not container:
         print("⚠️ 找不到活動列表。")
         return events
+
+    # 計算當月 + 未來兩個月的月份列表
+    today = datetime.now()
+    months_to_include = [(today + timedelta(days=30*i)).month for i in range(3)]
 
     # 找出每個活動區塊
     for item in container.find_all("a", href=True):
         name_tag = item.find("dt")
         date_tag = item.find("div", class_="e-content")
-
         if not name_tag:
             continue
 
-        name = name_tag.get_text(strip=True).rstrip(")")  # 去掉結尾多餘的 )
-        date = date_tag.get_text(strip=True) if date_tag else ""
+        name = name_tag.get_text(strip=True).rstrip(")")
+        date_text = date_tag.get_text(strip=True) if date_tag else ""
         link = item["href"]
         if not link.startswith("http"):
             link = "https://visitokinawajapan.com" + link
 
-        # 過濾已結束的活動
-        if date and "-" in date:
+        # 判斷活動開始月份是否在當月 + 未來兩個月
+        if date_text and "-" in date_text:
             try:
-                end_date = date.split("-")[-1].strip()
-                end_dt = datetime.strptime(end_date, "%Y/%m/%d")
-                if end_dt < datetime.now():
-                    continue
+                start_date_str = date_text.split("-")[0].strip()
+                start_dt = datetime.strptime(start_date_str, "%Y/%m/%d")
+                if start_dt.month in months_to_include:
+                    events.append({"name": name, "date": date_text, "url": link})
             except Exception:
-                pass
+                continue
 
-        events.append({"name": name, "date": date, "url": link})
-
-    print(f"✅ 共找到 {len(events)} 個未來活動")
+    # 按開始日期排序
+    events.sort(key=lambda x: x['date'])
+    print(f"✅ 共找到 {len(events)} 個活動 (當月+未來兩個月)")
     return events
 
 def send_to_telegram(events):
@@ -69,14 +72,9 @@ def send_to_telegram(events):
         print("⚠️ 未設定 TELEGRAM_TOKEN 或 CHAT_ID，略過發送。")
         return
 
-    if not events:
-        message = "本週沒有新的活動。"
-    else:
-        message = "📅 沖繩熱門活動\n\n"
-        # 按日期排序
-        events.sort(key=lambda x: x['date'])
-        for e in events:
-            message += f"{e['date']}\n[{e['name']}]({e['url']})\n"
+    message = "📅 沖繩熱門活動 (當月 + 未來兩個月)\n\n"
+    for e in events:
+        message += f"{e['date']}\n[{e['name']}]({e['url']})\n"
 
     send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
